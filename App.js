@@ -2,22 +2,33 @@ import {StatusBar} from 'expo-status-bar';
 import styled from '@emotion/native';
 import {Alert, TextInput, TouchableOpacity} from 'react-native';
 import {AntDesign, Feather} from '@expo/vector-icons';
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const StyledTouchNav = styled.TouchableOpacity`
-  width: 100px;
-  background-color: gray;
-`;
+import Tabs from './components/Tabs';
+import Todo from './components/Todo';
+
+import {
+  onSnapshot,
+  query,
+  collection,
+  doc,
+  orderBy,
+  addDoc,
+  getDoc,
+  getDocs,
+  updateDoc,
+  deleteDoc,
+} from 'firebase/firestore';
+import {dbService} from './firebase';
+import {async} from '@firebase/util';
 
 const StyleText = styled.Text`
   text-align: center;
   line-height: 50%;
   font-weight: 800;
 `;
-const NavContainer = styled.View`
-  flex-direction: row;
-  justify-content: space-between;
-`;
+
 const InputContainer = styled.View`
   justify-content: center;
   border-color: black;
@@ -41,22 +52,6 @@ const StyledInput = styled.TextInput`
 `;
 
 const ItemContainer = styled.View``;
-const Item = styled.View`
-  flex-direction: row;
-  background-color: #ddd;
-  width: 100%;
-  height: 50px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  margin: 0 0 10px 0;
-`;
-
-const Icons = styled.View`
-  flex-direction: row;
-  width: 90px;
-  justify-content: space-between;
-`;
 
 export default function App() {
   const [text, setText] = useState('');
@@ -64,27 +59,28 @@ export default function App() {
   const [todos, setTodos] = useState([]);
   const [editText, setEditText] = useState('');
 
-
   const newTodo = {
-    id: Date.now(),
+    // id: Date.now(),
     text,
     isDone: false,
     isEdit: false,
     category,
+    createdAt: Date.now(),
   };
 
   // 글 추가
-  const addTodo = () => {
-    setTodos([...todos, newTodo]);
+  const addTodo = async () => {
+    // setTodos([...todos, newTodo]);
+    await addDoc(collection(dbService, 'todos'), newTodo);
     setText('');
   };
 
   // 완료 표시
-  const setDone = (id) => {
-    const newTodos = [...todos];
-    const idx = newTodos.findIndex((todo) => todo.id === id);
-    newTodos[idx].isDone = !newTodos[idx].isDone;
-    setTodos(newTodos);
+  const setDone = async (id) => {
+    const idx = todos.findIndex((todo) => todo.id === id);
+    await updateDoc(doc(dbService, 'todos', id), {
+      isDone: !todos[idx].isDone,
+    });
   };
 
   // 글 삭제
@@ -97,57 +93,81 @@ export default function App() {
       {
         text: '삭제',
         style: 'destructive',
-        onPress: () => {
-          const newTodos = todos.filter((todo) => todo.id !== id);
+        onPress: async () => {
+          // const newTodos = todos.filter((todo) => todo.id !== id);
           // filter 메소드는 immutable이라 todos에 영향을 미치지 못해서 얕은복사를 하지 않았다.
-          setTodos(newTodos);
+          // setTodos(newTodos);
+          await deleteDoc(doc(dbService, 'todos', id));
         },
       },
     ]);
   };
 
   // 글 수정 (isEdit이 true일때 ㅇㅇㅇ해라 라고 할거기때문에 isDone이랑 로직이 동일함)
-  const isEdit = (id) => {
-    const newTodos = [...todos];
-    const idx = newTodos.findIndex((todo) => todo.id === id);
-    newTodos[idx].isEdit = !newTodos[idx].isEdit;
-    setTodos(newTodos);
+  const isEdit = async (id) => {
+    const idx = todos.findIndex((todo) => todo.id === id);
+    await updateDoc(doc(dbService, 'todos', id), {
+      isEdit: !todos[idx].isEdit,
+    });
   };
 
   // 수정 text 입력 후 엔터 눌렀을 때 실행
-  const editTodo = (id) => {
-    const newTodos = [...todos];
-    const idx = newTodos.findIndex((todo) => todo.id === id);
-    newTodos[idx].text = editText;
-    newTodos[idx].isEdit = false; // isEdit값을 닫아준다
-    setTodos(newTodos);
-    setEditText('');
+  const editTodo = async (id) => {
+    // const newTodos = [...todos];
+    // const idx = newTodos.findIndex((todo) => todo.id === id);
+    // newTodos[idx].text = editText;
+    // newTodos[idx].isEdit = false; // isEdit값을 닫아준다
+    // setTodos(newTodos);
+    // setEditText('');
+    await updateDoc(doc(dbService, 'todos', id), {
+      text: editText,
+      isEdit: false,
+    });
+  };
+
+  // 컴포넌트가 마운트 될 때 마다 실행
+  useEffect(() => {
+    // 1. onSnapshot API 이용해서 todos 콜렉션에 변경이 생길 때 마다
+    // 2. todos 콜렉션 안의 모든 document들을 불러와서 setTodos 한다.
+    const q = query(
+      collection(dbService, 'todos'),
+      orderBy('createdAt', 'desc')
+    );
+    onSnapshot(q, (snapshot) => {
+      const newTodos = snapshot.docs.map((doc) => {
+        const newTodo = {
+          id: doc.id,
+          ...doc.data(), // doc.data() : { text, createdAt, ...  }
+        };
+        return newTodo;
+      });
+      setTodos(newTodos);
+    });
+
+    const getCategory = async () => {
+      const snapshot = await getDoc(
+        doc(dbService, 'category', 'currentCategory')
+      );
+      console.log('snapshot.id:', snapshot.id);
+      console.log('snapshot.date:', snapshot.data());
+      setCategory(snapshot.data().category);
+    };
+    getCategory();
+  }, []);
+
+  // 카테고리 저장
+  const setCat = async (cat) => {
+    setCategory(cat);
+    // await AsyncStorage.setItem('category', cat); // data type이 string이라 stringify 할 필요 없다.
+    await updateDoc(doc(dbService, 'category', 'currentCategory'), {
+      category: cat,
+    });
   };
 
   return (
     <SafeView>
       <StatusBar />
-      <NavContainer flexWay={'row'}>
-        <StyledTouchNav
-          onPress={() => setCategory('js')}
-          style={{backgroundColor: category === 'js' ? '#0FBCF9' : 'grey'}}
-        >
-          <StyleText>Javascript</StyleText>
-        </StyledTouchNav>
-        <StyledTouchNav
-          onPress={() => setCategory('react')}
-          style={{backgroundColor: category === 'react' ? '#0FBCF9' : 'grey'}}
-        >
-          <StyleText>React</StyleText>
-        </StyledTouchNav>
-        <StyledTouchNav
-          onPress={() => setCategory('ct')}
-          style={{backgroundColor: category === 'ct' ? '#0FBCF9' : 'grey'}}
-        >
-          <StyleText>Coding Text</StyleText>
-        </StyledTouchNav>
-      </NavContainer>
-
+      <Tabs setCat={setCat} category={category} />
       <InputContainer>
         <StyledInput
           onSubmitEditing={addTodo}
@@ -160,38 +180,16 @@ export default function App() {
         {todos.map((todo) => {
           if (category === todo.category) {
             return (
-              <Item key={todo.id}>
-                {todo.isEdit ? ( // todo.isEdit이 true이면 TextInput, false면 styleText를 출력해라
-                  <TextInput
-                    onSubmitEditing={() => editTodo(todo.id)}
-                    value={editText}
-                    onChangeText={setEditText}
-                    style={{backgroundColor: 'white', flex: 1}}
-                  />
-                ) : (
-                  <StyleText
-                    style={{
-                      textDecorationLine: todo.isDone ? 'line-through' : 'none',
-                    }}
-                  >
-                    {todo.text}
-                  </StyleText>
-                )}
-                <Icons>
-                  <TouchableOpacity onPress={() => setDone(todo.id)}>
-                    <AntDesign name='checksquare' size={24} color='black' />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity onPress={() => isEdit(todo.id)}>
-                    <Feather name='edit' size={24} color='black' />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity onPress={() => deleteTodo(todo.id)}>
-                    {/* 삭제버튼에 delete 기능 추가 */}
-                    <AntDesign name='delete' size={24} color='black' />
-                  </TouchableOpacity>
-                </Icons>
-              </Item>
+              <Todo
+                key={todo.id}
+                todo={todo}
+                setDone={setDone}
+                editTodo={editTodo}
+                isEdit={isEdit}
+                deleteTodo={deleteTodo}
+                setEditText={setEditText}
+                editText={editText}
+              />
             );
           }
         })}
